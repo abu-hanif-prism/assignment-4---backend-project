@@ -90,7 +90,25 @@ const loginUser = async (payload: TLoginPayload) => {
   };
 };
 
+const getMe = async (userId: string) => {
+  const user = await prisma.user.findUniqueOrThrow({
+    where: { id: userId },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      phone: true,
+      role: true,
+      isBanned: true,
+      createdAt: true,
+    },
+  });
+
+  return user;
+};
+
 export const AuthServices = {
   registerUser,
   loginUser,
+  getMe,
 };
