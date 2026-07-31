@@ -1,5 +1,6 @@
 import type { ErrorRequestHandler } from 'express';
 import { StatusCodes } from 'http-status-codes';
+import { ZodError } from 'zod';
 import { Prisma } from '../../generated/prisma/client.js';
 import AppError from '../errors/AppError';
 
@@ -11,6 +12,13 @@ const globalErrorHandler: ErrorRequestHandler = (err, req, res, next) => {
   if (err instanceof AppError) {
     statusCode = err.statusCode;
     message = err.message;
+  } else if (err instanceof ZodError) {
+    statusCode = StatusCodes.BAD_REQUEST;
+    message = 'Validation error';
+    errorDetails = err.issues.map((issue) => ({
+      path: issue.path.join('.'),
+      message: issue.message,
+    }));
   } else if (err instanceof Prisma.PrismaClientKnownRequestError) {
     if (err.code === 'P2002') {
       statusCode = StatusCodes.CONFLICT;
