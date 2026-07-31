@@ -39,8 +39,42 @@ const deleteProperty = catchAsync(async (req, res) => {
   });
 });
 
+const getAllProperties = catchAsync(async (req, res) => {
+  const { categoryId, minPrice, maxPrice, isAvailable, search, page, limit } = req.query;
+
+  const result = await PropertyServices.getAllProperties({
+    categoryId: categoryId as string | undefined,
+    minPrice: minPrice ? Number(minPrice) : undefined,
+    maxPrice: maxPrice ? Number(maxPrice) : undefined,
+    isAvailable: isAvailable !== undefined ? isAvailable === 'true' : undefined,
+    search: search as string | undefined,
+    page: page ? Number(page) : undefined,
+    limit: limit ? Number(limit) : undefined,
+  });
+
+  sendResponse(res, {
+    statusCode: StatusCodes.OK,
+    success: true,
+    message: 'Properties retrieved successfully',
+    data: result,
+  });
+});
+
+const getSingleProperty = catchAsync(async (req, res) => {
+  const property = await PropertyServices.getSingleProperty(req.params.id as string);
+
+  sendResponse(res, {
+    statusCode: StatusCodes.OK,
+    success: true,
+    message: 'Property retrieved successfully',
+    data: property,
+  });
+});
+
 export const PropertyControllers = {
   createProperty,
   updateProperty,
   deleteProperty,
+  getAllProperties,
+  getSingleProperty,
 };

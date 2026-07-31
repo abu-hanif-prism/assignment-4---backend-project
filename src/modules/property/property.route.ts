@@ -4,6 +4,8 @@ import { PropertyControllers } from './property.controller';
 
 const router = Router();
 
+router.get('/', PropertyControllers.getAllProperties);
+router.get('/:id', PropertyControllers.getSingleProperty);
 router.post('/', auth('LANDLORD'), PropertyControllers.createProperty);
 router.patch('/:id', auth('LANDLORD'), PropertyControllers.updateProperty);
 router.delete('/:id', auth('LANDLORD'), PropertyControllers.deleteProperty);
