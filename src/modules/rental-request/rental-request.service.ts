@@ -1,5 +1,5 @@
 import { StatusCodes } from 'http-status-codes';
-import type { RentalStatus } from '../../../generated/prisma/enums.js';
+import type { RentalStatus, Role } from '../../../generated/prisma/enums.js';
 import AppError from '../../errors/AppError';
 import { prisma } from '../../lib/prisma';
 
@@ -84,7 +84,49 @@ const updateRentalRequestStatus = async (
   return updated;
 };
 
+const getMyRentalRequests = async (tenantId: string) => {
+  return prisma.rentalRequest.findMany({
+    where: { tenantId },
+    include: { property: { include: { category: true } } },
+    orderBy: { createdAt: 'desc' },
+  });
+};
+
+const getLandlordRentalRequests = async (landlordId: string) => {
+  return prisma.rentalRequest.findMany({
+    where: { property: { landlordId } },
+    include: {
+      property: true,
+      tenant: { select: { id: true, name: true, email: true, phone: true } },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+};
+
+const getSingleRentalRequest = async (id: string, userId: string, role: Role) => {
+  const rentalRequest = await prisma.rentalRequest.findUniqueOrThrow({
+    where: { id },
+    include: {
+      property: true,
+      tenant: { select: { id: true, name: true, email: true, phone: true } },
+    },
+  });
+
+  const isTenant = rentalRequest.tenantId === userId;
+  const isLandlord = rentalRequest.property.landlordId === userId;
+  const isAdmin = role === 'ADMIN';
+
+  if (!isTenant && !isLandlord && !isAdmin) {
+    throw new AppError(StatusCodes.FORBIDDEN, 'You do not have permission to view this rental request');
+  }
+
+  return rentalRequest;
+};
+
 export const RentalRequestServices = {
   createRentalRequest,
   updateRentalRequestStatus,
+  getMyRentalRequests,
+  getLandlordRentalRequests,
+  getSingleRentalRequest,
 };

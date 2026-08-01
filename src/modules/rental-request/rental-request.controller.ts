@@ -29,7 +29,47 @@ const updateRentalRequestStatus = catchAsync(async (req, res) => {
   });
 });
 
+const getMyRentalRequests = catchAsync(async (req, res) => {
+  const rentalRequests = await RentalRequestServices.getMyRentalRequests(req.user!.userId);
+
+  sendResponse(res, {
+    statusCode: StatusCodes.OK,
+    success: true,
+    message: 'Rental requests retrieved successfully',
+    data: rentalRequests,
+  });
+});
+
+const getLandlordRentalRequests = catchAsync(async (req, res) => {
+  const rentalRequests = await RentalRequestServices.getLandlordRentalRequests(req.user!.userId);
+
+  sendResponse(res, {
+    statusCode: StatusCodes.OK,
+    success: true,
+    message: 'Rental requests retrieved successfully',
+    data: rentalRequests,
+  });
+});
+
+const getSingleRentalRequest = catchAsync(async (req, res) => {
+  const rentalRequest = await RentalRequestServices.getSingleRentalRequest(
+    req.params.id as string,
+    req.user!.userId,
+    req.user!.role,
+  );
+
+  sendResponse(res, {
+    statusCode: StatusCodes.OK,
+    success: true,
+    message: 'Rental request retrieved successfully',
+    data: rentalRequest,
+  });
+});
+
 export const RentalRequestControllers = {
   createRentalRequest,
   updateRentalRequestStatus,
+  getMyRentalRequests,
+  getLandlordRentalRequests,
+  getSingleRentalRequest,
 };

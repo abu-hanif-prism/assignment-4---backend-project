@@ -6,6 +6,9 @@ import { RentalRequestValidations } from './rental-request.validation';
 
 const router = Router();
 
+router.get('/my-requests', auth('TENANT'), RentalRequestControllers.getMyRentalRequests);
+router.get('/landlord-requests', auth('LANDLORD'), RentalRequestControllers.getLandlordRentalRequests);
+router.get('/:id', auth(), RentalRequestControllers.getSingleRentalRequest);
 router.post(
   '/',
   auth('TENANT'),
