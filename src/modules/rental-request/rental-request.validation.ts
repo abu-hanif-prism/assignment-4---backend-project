@@ -11,6 +11,13 @@ const createRentalRequestValidationSchema = z.object({
   }),
 });
 
+const updateRentalRequestStatusValidationSchema = z.object({
+  body: z.object({
+    status: z.enum(['APPROVED', 'REJECTED']),
+  }),
+});
+
 export const RentalRequestValidations = {
   createRentalRequestValidationSchema,
+  updateRentalRequestStatusValidationSchema,
 };

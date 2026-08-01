@@ -12,5 +12,11 @@ router.post(
   validateRequest(RentalRequestValidations.createRentalRequestValidationSchema),
   RentalRequestControllers.createRentalRequest,
 );
+router.patch(
+  '/:id/status',
+  auth('LANDLORD'),
+  validateRequest(RentalRequestValidations.updateRentalRequestStatusValidationSchema),
+  RentalRequestControllers.updateRentalRequestStatus,
+);
 
 export const RentalRequestRoutes = router;
