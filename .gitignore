@@ -9,5 +9,3 @@ generated
 skills-lock.json
 .vercel
 .env*
-/api/index.js
-/api/index.js.map
