@@ -1,8 +1,8 @@
-import { Router } from 'express';
-import { AuthRoutes } from '../modules/auth/auth.route';
-import { CategoryRoutes } from '../modules/category/category.route';
-import { PropertyRoutes } from '../modules/property/property.route';
-import { RentalRequestRoutes } from '../modules/rental-request/rental-request.route';
+﻿import { Router } from 'express';
+import { AuthRoutes } from '../modules/auth/auth.route.js';
+import { CategoryRoutes } from '../modules/category/category.route.js';
+import { PropertyRoutes } from '../modules/property/property.route.js';
+import { RentalRequestRoutes } from '../modules/rental-request/rental-request.route.js';
 
 const router = Router();
 

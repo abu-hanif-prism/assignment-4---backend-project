@@ -1,8 +1,8 @@
-import { Router } from 'express';
-import auth from '../../middlewares/auth';
-import validateRequest from '../../middlewares/validateRequest';
-import { CategoryControllers } from './category.controller';
-import { CategoryValidations } from './category.validation';
+﻿import { Router } from 'express';
+import auth from '../../middlewares/auth.js';
+import validateRequest from '../../middlewares/validateRequest.js';
+import { CategoryControllers } from './category.controller.js';
+import { CategoryValidations } from './category.validation.js';
 
 const router = Router();
 

@@ -1,7 +1,7 @@
-import { StatusCodes } from 'http-status-codes';
-import catchAsync from '../../utils/catchAsync';
-import sendResponse from '../../utils/sendResponse';
-import { PropertyServices } from './property.service';
+﻿import { StatusCodes } from 'http-status-codes';
+import catchAsync from '../../utils/catchAsync.js';
+import sendResponse from '../../utils/sendResponse.js';
+import { PropertyServices } from './property.service.js';
 
 const createProperty = catchAsync(async (req, res) => {
   const property = await PropertyServices.createProperty(req.user!.userId, req.body);

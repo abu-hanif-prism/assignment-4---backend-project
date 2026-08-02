@@ -1,7 +1,7 @@
-import { StatusCodes } from 'http-status-codes';
+﻿import { StatusCodes } from 'http-status-codes';
 import type { RentalStatus, Role } from '../../../generated/prisma/enums.js';
-import AppError from '../../errors/AppError';
-import { prisma } from '../../lib/prisma';
+import AppError from '../../errors/AppError.js';
+import { prisma } from '../../lib/prisma.js';
 
 type TRentalRequestPayload = {
   propertyId: string;

@@ -1,11 +1,11 @@
-import type { NextFunction, Request, Response } from 'express';
+﻿import type { NextFunction, Request, Response } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import type { Role } from '../../generated/prisma/enums.js';
-import config from '../config';
-import AppError from '../errors/AppError';
-import { prisma } from '../lib/prisma';
-import catchAsync from '../utils/catchAsync';
-import { JwtHelpers } from '../utils/jwt';
+import config from '../config/index.js';
+import AppError from '../errors/AppError.js';
+import { prisma } from '../lib/prisma.js';
+import catchAsync from '../utils/catchAsync.js';
+import { JwtHelpers } from '../utils/jwt.js';
 
 const auth = (...allowedRoles: Role[]) => {
   return catchAsync(async (req: Request, res: Response, next: NextFunction) => {

@@ -1,7 +1,7 @@
-import { StatusCodes } from 'http-status-codes';
-import catchAsync from '../../utils/catchAsync';
-import sendResponse from '../../utils/sendResponse';
-import { RentalRequestServices } from './rental-request.service';
+﻿import { StatusCodes } from 'http-status-codes';
+import catchAsync from '../../utils/catchAsync.js';
+import sendResponse from '../../utils/sendResponse.js';
+import { RentalRequestServices } from './rental-request.service.js';
 
 const createRentalRequest = catchAsync(async (req, res) => {
   const rentalRequest = await RentalRequestServices.createRentalRequest(req.user!.userId, req.body);

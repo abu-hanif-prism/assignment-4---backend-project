@@ -1,10 +1,10 @@
-import bcrypt from 'bcryptjs';
+﻿import bcrypt from 'bcryptjs';
 import { StatusCodes } from 'http-status-codes';
 import type { Role } from '../../../generated/prisma/enums.js';
-import config from '../../config';
-import AppError from '../../errors/AppError';
-import { prisma } from '../../lib/prisma';
-import { JwtHelpers, type TExpiresIn } from '../../utils/jwt';
+import config from '../../config/index.js';
+import AppError from '../../errors/AppError.js';
+import { prisma } from '../../lib/prisma.js';
+import { JwtHelpers, type TExpiresIn } from '../../utils/jwt.js';
 
 type TRegisterPayload = {
   name: string;

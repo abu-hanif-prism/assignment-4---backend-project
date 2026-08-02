@@ -1,8 +1,8 @@
-import { Router } from 'express';
-import auth from '../../middlewares/auth';
-import validateRequest from '../../middlewares/validateRequest';
-import { RentalRequestControllers } from './rental-request.controller';
-import { RentalRequestValidations } from './rental-request.validation';
+﻿import { Router } from 'express';
+import auth from '../../middlewares/auth.js';
+import validateRequest from '../../middlewares/validateRequest.js';
+import { RentalRequestControllers } from './rental-request.controller.js';
+import { RentalRequestValidations } from './rental-request.validation.js';
 
 const router = Router();
 

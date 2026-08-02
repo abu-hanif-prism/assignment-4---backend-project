@@ -1,8 +1,8 @@
-import type { ErrorRequestHandler } from 'express';
+﻿import type { ErrorRequestHandler } from 'express';
 import { StatusCodes } from 'http-status-codes';
 import { ZodError } from 'zod';
 import { Prisma } from '../../generated/prisma/client.js';
-import AppError from '../errors/AppError';
+import AppError from '../errors/AppError.js';
 
 const globalErrorHandler: ErrorRequestHandler = (err, req, res, next) => {
   let statusCode: number = StatusCodes.INTERNAL_SERVER_ERROR;
