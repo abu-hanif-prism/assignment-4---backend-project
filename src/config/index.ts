@@ -1,6 +1,6 @@
 import 'dotenv/config';
 
-const requiredEnvVars = ['DATABASE_URL', 'JWT_ACCESS_SECRET'] as const;
+const requiredEnvVars = ['DATABASE_URL', 'JWT_ACCESS_SECRET', 'STRIPE_SECRET_KEY'] as const;
 
 for (const key of requiredEnvVars) {
   if (!process.env[key]) {
@@ -13,6 +13,7 @@ const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   jwtAccessSecret: process.env.JWT_ACCESS_SECRET as string,
   jwtAccessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '7d',
+  stripeSecretKey: process.env.STRIPE_SECRET_KEY as string,
 };
 
 export default config;

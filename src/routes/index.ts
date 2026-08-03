@@ -2,6 +2,7 @@
 import { AuthRoutes } from '../modules/auth/auth.route.js';
 import { CategoryRoutes } from '../modules/category/category.route.js';
 import { PropertyRoutes } from '../modules/property/property.route.js';
+import { PaymentRoutes } from '../modules/payment/payment.route.js';
 import { RentalRequestRoutes } from '../modules/rental-request/rental-request.route.js';
 
 const router = Router();
@@ -22,6 +23,10 @@ const moduleRoutes = [
   {
     path: '/rental-requests',
     route: RentalRequestRoutes,
+  },
+  {
+    path: '/payments',
+    route: PaymentRoutes,
   },
 ];
 
