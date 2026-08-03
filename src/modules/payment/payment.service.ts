@@ -1,5 +1,6 @@
 import { StatusCodes } from 'http-status-codes';
 import Stripe from 'stripe';
+import type { Role } from '../../../generated/prisma/enums.js';
 import config from '../../config/index.js';
 import AppError from '../../errors/AppError.js';
 import { prisma } from '../../lib/prisma.js';
@@ -135,10 +136,60 @@ const confirmPayment = async (tenantId: string, paymentIntentId: string) => {
   throw new AppError(StatusCodes.BAD_REQUEST, `Payment has not completed yet (status: ${paymentIntent.status})`);
 };
 
+const getMyPayments = async (tenantId: string) => {
+  return prisma.payment.findMany({
+    where: { rentalRequest: { tenantId } },
+    include: { rentalRequest: { include: { property: true } } },
+    orderBy: { createdAt: 'desc' },
+  });
+};
+
+const getLandlordPayments = async (landlordId: string) => {
+  return prisma.payment.findMany({
+    where: { rentalRequest: { property: { landlordId } } },
+    include: {
+      rentalRequest: {
+        include: {
+          property: true,
+          tenant: { select: { id: true, name: true, email: true, phone: true } },
+        },
+      },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+};
+
+const getSinglePayment = async (paymentId: string, userId: string, role: Role) => {
+  const payment = await prisma.payment.findUniqueOrThrow({
+    where: { id: paymentId },
+    include: {
+      rentalRequest: {
+        include: {
+          property: true,
+          tenant: { select: { id: true, name: true, email: true, phone: true } },
+        },
+      },
+    },
+  });
+
+  const isTenant = payment.rentalRequest.tenantId === userId;
+  const isLandlord = payment.rentalRequest.property.landlordId === userId;
+  const isAdmin = role === 'ADMIN';
+
+  if (!isTenant && !isLandlord && !isAdmin) {
+    throw new AppError(StatusCodes.FORBIDDEN, 'You do not have permission to view this payment');
+  }
+
+  return payment;
+};
+
 export const PaymentServices = {
   createPaymentIntent,
   handleWebhookEvent,
   confirmPayment,
+  getMyPayments,
+  getLandlordPayments,
+  getSinglePayment,
 };
 
 export { stripe };

@@ -47,8 +47,48 @@ const stripeWebhook = catchAsync(async (req, res) => {
   res.status(StatusCodes.OK).json({ received: true });
 });
 
+const getMyPayments = catchAsync(async (req, res) => {
+  const payments = await PaymentServices.getMyPayments(req.user!.userId);
+
+  sendResponse(res, {
+    statusCode: StatusCodes.OK,
+    success: true,
+    message: 'Payments retrieved successfully',
+    data: payments,
+  });
+});
+
+const getLandlordPayments = catchAsync(async (req, res) => {
+  const payments = await PaymentServices.getLandlordPayments(req.user!.userId);
+
+  sendResponse(res, {
+    statusCode: StatusCodes.OK,
+    success: true,
+    message: 'Payments retrieved successfully',
+    data: payments,
+  });
+});
+
+const getSinglePayment = catchAsync(async (req, res) => {
+  const payment = await PaymentServices.getSinglePayment(
+    req.params.id as string,
+    req.user!.userId,
+    req.user!.role,
+  );
+
+  sendResponse(res, {
+    statusCode: StatusCodes.OK,
+    success: true,
+    message: 'Payment retrieved successfully',
+    data: payment,
+  });
+});
+
 export const PaymentControllers = {
   createPaymentIntent,
   confirmPayment,
   stripeWebhook,
+  getMyPayments,
+  getLandlordPayments,
+  getSinglePayment,
 };

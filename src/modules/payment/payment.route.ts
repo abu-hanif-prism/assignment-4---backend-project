@@ -6,6 +6,9 @@ import { PaymentValidations } from './payment.validation.js';
 
 const router = Router();
 
+router.get('/my-payments', auth('TENANT'), PaymentControllers.getMyPayments);
+router.get('/landlord-payments', auth('LANDLORD'), PaymentControllers.getLandlordPayments);
+router.get('/:id', auth(), PaymentControllers.getSinglePayment);
 router.post(
   '/create-intent',
   auth('TENANT'),
