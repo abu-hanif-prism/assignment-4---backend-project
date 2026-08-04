@@ -1,4 +1,5 @@
 ﻿import { Router } from 'express';
+import { AdminRoutes } from '../modules/admin/admin.route.js';
 import { AuthRoutes } from '../modules/auth/auth.route.js';
 import { CategoryRoutes } from '../modules/category/category.route.js';
 import { PropertyRoutes } from '../modules/property/property.route.js';
@@ -32,6 +33,10 @@ const moduleRoutes = [
   {
     path: '/reviews',
     route: ReviewRoutes,
+  },
+  {
+    path: '/admin',
+    route: AdminRoutes,
   },
 ];
 
