@@ -21,5 +21,6 @@ router.patch(
   validateRequest(RentalRequestValidations.updateRentalRequestStatusValidationSchema),
   RentalRequestControllers.updateRentalRequestStatus,
 );
+router.patch('/:id/complete', auth('LANDLORD'), RentalRequestControllers.completeRentalRequest);
 
 export const RentalRequestRoutes = router;

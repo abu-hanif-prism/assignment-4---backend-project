@@ -29,6 +29,20 @@ const updateRentalRequestStatus = catchAsync(async (req, res) => {
   });
 });
 
+const completeRentalRequest = catchAsync(async (req, res) => {
+  const rentalRequest = await RentalRequestServices.completeRentalRequest(
+    req.params.id as string,
+    req.user!.userId,
+  );
+
+  sendResponse(res, {
+    statusCode: StatusCodes.OK,
+    success: true,
+    message: 'Rental marked as completed successfully',
+    data: rentalRequest,
+  });
+});
+
 const getMyRentalRequests = catchAsync(async (req, res) => {
   const rentalRequests = await RentalRequestServices.getMyRentalRequests(req.user!.userId);
 
@@ -69,6 +83,7 @@ const getSingleRentalRequest = catchAsync(async (req, res) => {
 export const RentalRequestControllers = {
   createRentalRequest,
   updateRentalRequestStatus,
+  completeRentalRequest,
   getMyRentalRequests,
   getLandlordRentalRequests,
   getSingleRentalRequest,

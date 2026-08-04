@@ -84,6 +84,35 @@ const updateRentalRequestStatus = async (
   return updated;
 };
 
+const completeRentalRequest = async (rentalRequestId: string, landlordId: string) => {
+  const rentalRequest = await prisma.rentalRequest.findUniqueOrThrow({
+    where: { id: rentalRequestId },
+    include: { property: true },
+  });
+
+  if (rentalRequest.property.landlordId !== landlordId) {
+    throw new AppError(StatusCodes.FORBIDDEN, 'You can only manage requests for your own properties');
+  }
+
+  if (rentalRequest.status !== 'ACTIVE') {
+    throw new AppError(StatusCodes.BAD_REQUEST, 'Only an active rental can be marked as completed');
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const result = await tx.rentalRequest.update({
+      where: { id: rentalRequestId },
+      data: { status: 'COMPLETED' },
+    });
+
+    await tx.property.update({
+      where: { id: rentalRequest.propertyId },
+      data: { isAvailable: true },
+    });
+
+    return result;
+  });
+};
+
 const getMyRentalRequests = async (tenantId: string) => {
   return prisma.rentalRequest.findMany({
     where: { tenantId },
@@ -126,6 +155,7 @@ const getSingleRentalRequest = async (id: string, userId: string, role: Role) =>
 export const RentalRequestServices = {
   createRentalRequest,
   updateRentalRequestStatus,
+  completeRentalRequest,
   getMyRentalRequests,
   getLandlordRentalRequests,
   getSingleRentalRequest,
