@@ -28,11 +28,34 @@ const createPaymentIntent = async (tenantId: string, rentalRequestId: string) =>
 
     const existingIntent = await stripe.paymentIntents.retrieve(rentalRequest.payment.transactionId as string);
 
-    return {
-      clientSecret: existingIntent.client_secret,
-      paymentId: rentalRequest.payment.id,
-      amount: rentalRequest.payment.amount,
-    };
+    if (existingIntent.status === 'succeeded') {
+      // Safety net: Stripe confirms success but our webhook/confirm call hasn't landed yet
+      await markPaymentCompleted(existingIntent.id);
+      throw new AppError(StatusCodes.CONFLICT, 'This rental request has already been paid for');
+    }
+
+    const retriableStatuses: Stripe.PaymentIntent.Status[] = [
+      'requires_payment_method',
+      'requires_confirmation',
+      'requires_action',
+      'processing',
+    ];
+
+    if (retriableStatuses.includes(existingIntent.status)) {
+      const payment = await prisma.payment.update({
+        where: { id: rentalRequest.payment.id },
+        data: { status: 'PENDING' },
+      });
+
+      return {
+        clientSecret: existingIntent.client_secret,
+        paymentId: payment.id,
+        amount: payment.amount,
+      };
+    }
+
+    // Otherwise the intent is in a terminal, unusable state (e.g. canceled/expired) —
+    // fall through and issue a fresh PaymentIntent instead of handing back a dead one.
   }
 
   const amount = Math.round(rentalRequest.property.price * 100);
@@ -47,13 +70,21 @@ const createPaymentIntent = async (tenantId: string, rentalRequestId: string) =>
     },
   });
 
-  const payment = await prisma.payment.create({
-    data: {
+  // upsert on the unique rentalRequestId: never create a second Payment row for the
+  // same rental request, even if the previous PaymentIntent went terminally stale.
+  const payment = await prisma.payment.upsert({
+    where: { rentalRequestId: rentalRequest.id },
+    create: {
       rentalRequestId: rentalRequest.id,
       amount: rentalRequest.property.price,
       provider: 'STRIPE',
       status: 'PENDING',
       transactionId: paymentIntent.id,
+    },
+    update: {
+      status: 'PENDING',
+      transactionId: paymentIntent.id,
+      paidAt: null,
     },
   });
 

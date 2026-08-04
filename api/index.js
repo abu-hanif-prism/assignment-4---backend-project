@@ -342,11 +342,27 @@ var createPaymentIntent = async (tenantId, rentalRequestId) => {
       throw new AppError_default(StatusCodes3.CONFLICT, "This rental request has already been paid for");
     }
     const existingIntent = await stripe.paymentIntents.retrieve(rentalRequest.payment.transactionId);
-    return {
-      clientSecret: existingIntent.client_secret,
-      paymentId: rentalRequest.payment.id,
-      amount: rentalRequest.payment.amount
-    };
+    if (existingIntent.status === "succeeded") {
+      await markPaymentCompleted(existingIntent.id);
+      throw new AppError_default(StatusCodes3.CONFLICT, "This rental request has already been paid for");
+    }
+    const retriableStatuses = [
+      "requires_payment_method",
+      "requires_confirmation",
+      "requires_action",
+      "processing"
+    ];
+    if (retriableStatuses.includes(existingIntent.status)) {
+      const payment2 = await prisma.payment.update({
+        where: { id: rentalRequest.payment.id },
+        data: { status: "PENDING" }
+      });
+      return {
+        clientSecret: existingIntent.client_secret,
+        paymentId: payment2.id,
+        amount: payment2.amount
+      };
+    }
   }
   const amount = Math.round(rentalRequest.property.price * 100);
   const paymentIntent = await stripe.paymentIntents.create({
@@ -358,13 +374,19 @@ var createPaymentIntent = async (tenantId, rentalRequestId) => {
       tenantId
     }
   });
-  const payment = await prisma.payment.create({
-    data: {
+  const payment = await prisma.payment.upsert({
+    where: { rentalRequestId: rentalRequest.id },
+    create: {
       rentalRequestId: rentalRequest.id,
       amount: rentalRequest.property.price,
       provider: "STRIPE",
       status: "PENDING",
       transactionId: paymentIntent.id
+    },
+    update: {
+      status: "PENDING",
+      transactionId: paymentIntent.id,
+      paidAt: null
     }
   });
   return {
@@ -430,10 +452,54 @@ var confirmPayment = async (tenantId, paymentIntentId) => {
   }
   throw new AppError_default(StatusCodes3.BAD_REQUEST, `Payment has not completed yet (status: ${paymentIntent.status})`);
 };
+var getMyPayments = async (tenantId) => {
+  return prisma.payment.findMany({
+    where: { rentalRequest: { tenantId } },
+    include: { rentalRequest: { include: { property: true } } },
+    orderBy: { createdAt: "desc" }
+  });
+};
+var getLandlordPayments = async (landlordId) => {
+  return prisma.payment.findMany({
+    where: { rentalRequest: { property: { landlordId } } },
+    include: {
+      rentalRequest: {
+        include: {
+          property: true,
+          tenant: { select: { id: true, name: true, email: true, phone: true } }
+        }
+      }
+    },
+    orderBy: { createdAt: "desc" }
+  });
+};
+var getSinglePayment = async (paymentId, userId, role) => {
+  const payment = await prisma.payment.findUniqueOrThrow({
+    where: { id: paymentId },
+    include: {
+      rentalRequest: {
+        include: {
+          property: true,
+          tenant: { select: { id: true, name: true, email: true, phone: true } }
+        }
+      }
+    }
+  });
+  const isTenant = payment.rentalRequest.tenantId === userId;
+  const isLandlord = payment.rentalRequest.property.landlordId === userId;
+  const isAdmin = role === "ADMIN";
+  if (!isTenant && !isLandlord && !isAdmin) {
+    throw new AppError_default(StatusCodes3.FORBIDDEN, "You do not have permission to view this payment");
+  }
+  return payment;
+};
 var PaymentServices = {
   createPaymentIntent,
   handleWebhookEvent,
-  confirmPayment
+  confirmPayment,
+  getMyPayments,
+  getLandlordPayments,
+  getSinglePayment
 };
 
 // src/modules/payment/payment.controller.ts
@@ -469,10 +535,44 @@ var stripeWebhook = catchAsync_default(async (req, res) => {
   await PaymentServices.handleWebhookEvent(event);
   res.status(StatusCodes4.OK).json({ received: true });
 });
+var getMyPayments2 = catchAsync_default(async (req, res) => {
+  const payments = await PaymentServices.getMyPayments(req.user.userId);
+  sendResponse_default(res, {
+    statusCode: StatusCodes4.OK,
+    success: true,
+    message: "Payments retrieved successfully",
+    data: payments
+  });
+});
+var getLandlordPayments2 = catchAsync_default(async (req, res) => {
+  const payments = await PaymentServices.getLandlordPayments(req.user.userId);
+  sendResponse_default(res, {
+    statusCode: StatusCodes4.OK,
+    success: true,
+    message: "Payments retrieved successfully",
+    data: payments
+  });
+});
+var getSinglePayment2 = catchAsync_default(async (req, res) => {
+  const payment = await PaymentServices.getSinglePayment(
+    req.params.id,
+    req.user.userId,
+    req.user.role
+  );
+  sendResponse_default(res, {
+    statusCode: StatusCodes4.OK,
+    success: true,
+    message: "Payment retrieved successfully",
+    data: payment
+  });
+});
 var PaymentControllers = {
   createPaymentIntent: createPaymentIntent2,
   confirmPayment: confirmPayment2,
-  stripeWebhook
+  stripeWebhook,
+  getMyPayments: getMyPayments2,
+  getLandlordPayments: getLandlordPayments2,
+  getSinglePayment: getSinglePayment2
 };
 
 // src/routes/index.ts
@@ -1071,6 +1171,9 @@ var PaymentValidations = {
 
 // src/modules/payment/payment.route.ts
 var router4 = Router4();
+router4.get("/my-payments", auth_default("TENANT"), PaymentControllers.getMyPayments);
+router4.get("/landlord-payments", auth_default("LANDLORD"), PaymentControllers.getLandlordPayments);
+router4.get("/:id", auth_default(), PaymentControllers.getSinglePayment);
 router4.post(
   "/create-intent",
   auth_default("TENANT"),
