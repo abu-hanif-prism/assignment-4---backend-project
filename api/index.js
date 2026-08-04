@@ -269,18 +269,17 @@ var notFound = (req, res) => {
 };
 var notFound_default = notFound;
 
-// src/routes/index.ts
-import { Router as Router5 } from "express";
-
-// src/modules/auth/auth.route.ts
-import { Router } from "express";
-
-// src/middlewares/auth.ts
-import { StatusCodes as StatusCodes3 } from "http-status-codes";
+// src/modules/payment/payment.controller.ts
+import { StatusCodes as StatusCodes4 } from "http-status-codes";
 
 // src/config/index.ts
 import "dotenv/config";
-var requiredEnvVars = ["DATABASE_URL", "JWT_ACCESS_SECRET"];
+var requiredEnvVars = [
+  "DATABASE_URL",
+  "JWT_ACCESS_SECRET",
+  "STRIPE_SECRET_KEY",
+  "STRIPE_WEBHOOK_SECRET"
+];
 for (const key of requiredEnvVars) {
   if (!process.env[key]) {
     throw new Error(`Missing required environment variable: ${key}`);
@@ -290,16 +289,11 @@ var config2 = {
   port: process.env.PORT || 3e3,
   nodeEnv: process.env.NODE_ENV || "development",
   jwtAccessSecret: process.env.JWT_ACCESS_SECRET,
-  jwtAccessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || "7d"
+  jwtAccessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || "7d",
+  stripeSecretKey: process.env.STRIPE_SECRET_KEY,
+  stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET
 };
 var config_default = config2;
-
-// src/lib/prisma.ts
-import "dotenv/config";
-import { PrismaPg } from "@prisma/adapter-pg";
-var connectionString = `${process.env.DATABASE_URL}`;
-var adapter = new PrismaPg({ connectionString });
-var prisma = new PrismaClient({ adapter });
 
 // src/utils/catchAsync.ts
 var catchAsync = (fn) => {
@@ -308,6 +302,187 @@ var catchAsync = (fn) => {
   };
 };
 var catchAsync_default = catchAsync;
+
+// src/utils/sendResponse.ts
+var sendResponse = (res, response) => {
+  res.status(response.statusCode).json({
+    success: response.success,
+    message: response.message,
+    data: response.data
+  });
+};
+var sendResponse_default = sendResponse;
+
+// src/modules/payment/payment.service.ts
+import { StatusCodes as StatusCodes3 } from "http-status-codes";
+import Stripe from "stripe";
+
+// src/lib/prisma.ts
+import "dotenv/config";
+import { PrismaPg } from "@prisma/adapter-pg";
+var connectionString = `${process.env.DATABASE_URL}`;
+var adapter = new PrismaPg({ connectionString });
+var prisma = new PrismaClient({ adapter });
+
+// src/modules/payment/payment.service.ts
+var stripe = new Stripe(config_default.stripeSecretKey);
+var createPaymentIntent = async (tenantId, rentalRequestId) => {
+  const rentalRequest = await prisma.rentalRequest.findUniqueOrThrow({
+    where: { id: rentalRequestId },
+    include: { property: true, payment: true }
+  });
+  if (rentalRequest.tenantId !== tenantId) {
+    throw new AppError_default(StatusCodes3.FORBIDDEN, "You can only pay for your own rental requests");
+  }
+  if (rentalRequest.status !== "APPROVED") {
+    throw new AppError_default(StatusCodes3.BAD_REQUEST, "Payment can only be made for an approved rental request");
+  }
+  if (rentalRequest.payment) {
+    if (rentalRequest.payment.status === "COMPLETED") {
+      throw new AppError_default(StatusCodes3.CONFLICT, "This rental request has already been paid for");
+    }
+    const existingIntent = await stripe.paymentIntents.retrieve(rentalRequest.payment.transactionId);
+    return {
+      clientSecret: existingIntent.client_secret,
+      paymentId: rentalRequest.payment.id,
+      amount: rentalRequest.payment.amount
+    };
+  }
+  const amount = Math.round(rentalRequest.property.price * 100);
+  const paymentIntent = await stripe.paymentIntents.create({
+    amount,
+    currency: "usd",
+    automatic_payment_methods: { enabled: true, allow_redirects: "never" },
+    metadata: {
+      rentalRequestId: rentalRequest.id,
+      tenantId
+    }
+  });
+  const payment = await prisma.payment.create({
+    data: {
+      rentalRequestId: rentalRequest.id,
+      amount: rentalRequest.property.price,
+      provider: "STRIPE",
+      status: "PENDING",
+      transactionId: paymentIntent.id
+    }
+  });
+  return {
+    clientSecret: paymentIntent.client_secret,
+    paymentId: payment.id,
+    amount: payment.amount
+  };
+};
+var markPaymentCompleted = async (transactionId) => {
+  const payment = await prisma.payment.findUnique({ where: { transactionId } });
+  if (!payment) {
+    return null;
+  }
+  if (payment.status === "COMPLETED") {
+    return payment;
+  }
+  return prisma.$transaction(async (tx) => {
+    const result = await tx.payment.update({
+      where: { id: payment.id },
+      data: { status: "COMPLETED", paidAt: /* @__PURE__ */ new Date() }
+    });
+    await tx.rentalRequest.update({
+      where: { id: payment.rentalRequestId },
+      data: { status: "ACTIVE" }
+    });
+    return result;
+  });
+};
+var markPaymentFailed = async (transactionId) => {
+  await prisma.payment.updateMany({
+    where: { transactionId, status: "PENDING" },
+    data: { status: "FAILED" }
+  });
+};
+var handleWebhookEvent = async (event) => {
+  if (event.type === "payment_intent.succeeded") {
+    const paymentIntent = event.data.object;
+    await markPaymentCompleted(paymentIntent.id);
+  } else if (event.type === "payment_intent.payment_failed") {
+    const paymentIntent = event.data.object;
+    await markPaymentFailed(paymentIntent.id);
+  }
+};
+var confirmPayment = async (tenantId, paymentIntentId) => {
+  const payment = await prisma.payment.findUnique({
+    where: { transactionId: paymentIntentId },
+    include: { rentalRequest: true }
+  });
+  if (!payment) {
+    throw new AppError_default(StatusCodes3.NOT_FOUND, "No payment record found for this transaction");
+  }
+  if (payment.rentalRequest.tenantId !== tenantId) {
+    throw new AppError_default(StatusCodes3.FORBIDDEN, "You can only confirm your own payments");
+  }
+  const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+  if (paymentIntent.status === "succeeded") {
+    const updated = await markPaymentCompleted(paymentIntentId);
+    return updated;
+  }
+  if (paymentIntent.status === "canceled" || paymentIntent.status === "requires_payment_method") {
+    await markPaymentFailed(paymentIntentId);
+    throw new AppError_default(StatusCodes3.BAD_REQUEST, `Payment was not successful (status: ${paymentIntent.status})`);
+  }
+  throw new AppError_default(StatusCodes3.BAD_REQUEST, `Payment has not completed yet (status: ${paymentIntent.status})`);
+};
+var PaymentServices = {
+  createPaymentIntent,
+  handleWebhookEvent,
+  confirmPayment
+};
+
+// src/modules/payment/payment.controller.ts
+var createPaymentIntent2 = catchAsync_default(async (req, res) => {
+  const result = await PaymentServices.createPaymentIntent(req.user.userId, req.body.rentalRequestId);
+  sendResponse_default(res, {
+    statusCode: StatusCodes4.CREATED,
+    success: true,
+    message: "Payment intent created successfully",
+    data: result
+  });
+});
+var confirmPayment2 = catchAsync_default(async (req, res) => {
+  const payment = await PaymentServices.confirmPayment(req.user.userId, req.body.paymentIntentId);
+  sendResponse_default(res, {
+    statusCode: StatusCodes4.OK,
+    success: true,
+    message: "Payment confirmed successfully",
+    data: payment
+  });
+});
+var stripeWebhook = catchAsync_default(async (req, res) => {
+  const signature = req.headers["stripe-signature"];
+  if (!signature) {
+    throw new AppError_default(StatusCodes4.BAD_REQUEST, "Missing Stripe signature header");
+  }
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, signature, config_default.stripeWebhookSecret);
+  } catch {
+    throw new AppError_default(StatusCodes4.BAD_REQUEST, "Webhook signature verification failed");
+  }
+  await PaymentServices.handleWebhookEvent(event);
+  res.status(StatusCodes4.OK).json({ received: true });
+});
+var PaymentControllers = {
+  createPaymentIntent: createPaymentIntent2,
+  confirmPayment: confirmPayment2,
+  stripeWebhook
+};
+
+// src/routes/index.ts
+import { Router as Router6 } from "express";
+
+// src/modules/auth/auth.route.ts
+import { Router } from "express";
+
+// src/middlewares/auth.ts
+import { StatusCodes as StatusCodes5 } from "http-status-codes";
 
 // src/utils/jwt.ts
 import jwt from "jsonwebtoken";
@@ -327,23 +502,23 @@ var auth = (...allowedRoles) => {
   return catchAsync_default(async (req, res, next) => {
     const token = req.cookies?.accessToken || req.headers.authorization?.replace("Bearer ", "");
     if (!token) {
-      throw new AppError_default(StatusCodes3.UNAUTHORIZED, "You are not authorized to access this resource");
+      throw new AppError_default(StatusCodes5.UNAUTHORIZED, "You are not authorized to access this resource");
     }
     let decoded;
     try {
       decoded = JwtHelpers.verifyToken(token, config_default.jwtAccessSecret);
     } catch {
-      throw new AppError_default(StatusCodes3.UNAUTHORIZED, "Invalid or expired token");
+      throw new AppError_default(StatusCodes5.UNAUTHORIZED, "Invalid or expired token");
     }
     const user = await prisma.user.findUnique({ where: { id: decoded.userId } });
     if (!user) {
-      throw new AppError_default(StatusCodes3.UNAUTHORIZED, "User no longer exists");
+      throw new AppError_default(StatusCodes5.UNAUTHORIZED, "User no longer exists");
     }
     if (user.isBanned) {
-      throw new AppError_default(StatusCodes3.FORBIDDEN, "This account has been banned");
+      throw new AppError_default(StatusCodes5.FORBIDDEN, "This account has been banned");
     }
     if (allowedRoles.length && !allowedRoles.includes(user.role)) {
-      throw new AppError_default(StatusCodes3.FORBIDDEN, "You do not have permission to perform this action");
+      throw new AppError_default(StatusCodes5.FORBIDDEN, "You do not have permission to perform this action");
     }
     req.user = {
       userId: user.id,
@@ -370,28 +545,18 @@ var validateRequest = (schema) => {
 var validateRequest_default = validateRequest;
 
 // src/modules/auth/auth.controller.ts
-import { StatusCodes as StatusCodes5 } from "http-status-codes";
-
-// src/utils/sendResponse.ts
-var sendResponse = (res, response) => {
-  res.status(response.statusCode).json({
-    success: response.success,
-    message: response.message,
-    data: response.data
-  });
-};
-var sendResponse_default = sendResponse;
+import { StatusCodes as StatusCodes7 } from "http-status-codes";
 
 // src/modules/auth/auth.service.ts
 import bcrypt from "bcryptjs";
-import { StatusCodes as StatusCodes4 } from "http-status-codes";
+import { StatusCodes as StatusCodes6 } from "http-status-codes";
 var registerUser = async (payload) => {
   if (payload.role === "ADMIN") {
-    throw new AppError_default(StatusCodes4.BAD_REQUEST, "Cannot register with admin role");
+    throw new AppError_default(StatusCodes6.BAD_REQUEST, "Cannot register with admin role");
   }
   const existingUser = await prisma.user.findUnique({ where: { email: payload.email } });
   if (existingUser) {
-    throw new AppError_default(StatusCodes4.CONFLICT, "A user with this email already exists");
+    throw new AppError_default(StatusCodes6.CONFLICT, "A user with this email already exists");
   }
   const hashedPassword = await bcrypt.hash(payload.password, 10);
   const user = await prisma.user.create({
@@ -417,14 +582,14 @@ var registerUser = async (payload) => {
 var loginUser = async (payload) => {
   const user = await prisma.user.findUnique({ where: { email: payload.email } });
   if (!user) {
-    throw new AppError_default(StatusCodes4.UNAUTHORIZED, "Invalid email or password");
+    throw new AppError_default(StatusCodes6.UNAUTHORIZED, "Invalid email or password");
   }
   if (user.isBanned) {
-    throw new AppError_default(StatusCodes4.FORBIDDEN, "This account has been banned");
+    throw new AppError_default(StatusCodes6.FORBIDDEN, "This account has been banned");
   }
   const isPasswordValid = await bcrypt.compare(payload.password, user.password);
   if (!isPasswordValid) {
-    throw new AppError_default(StatusCodes4.UNAUTHORIZED, "Invalid email or password");
+    throw new AppError_default(StatusCodes6.UNAUTHORIZED, "Invalid email or password");
   }
   const accessToken = JwtHelpers.createToken(
     { userId: user.id, email: user.email, role: user.role },
@@ -468,7 +633,7 @@ var AuthServices = {
 var registerUser2 = catchAsync_default(async (req, res) => {
   const user = await AuthServices.registerUser(req.body);
   sendResponse_default(res, {
-    statusCode: StatusCodes5.CREATED,
+    statusCode: StatusCodes7.CREATED,
     success: true,
     message: "User registered successfully",
     data: user
@@ -482,7 +647,7 @@ var loginUser2 = catchAsync_default(async (req, res) => {
     sameSite: "lax"
   });
   sendResponse_default(res, {
-    statusCode: StatusCodes5.OK,
+    statusCode: StatusCodes7.OK,
     success: true,
     message: "Logged in successfully",
     data: { user: result.user }
@@ -491,7 +656,7 @@ var loginUser2 = catchAsync_default(async (req, res) => {
 var logoutUser = catchAsync_default(async (req, res) => {
   res.clearCookie("accessToken");
   sendResponse_default(res, {
-    statusCode: StatusCodes5.OK,
+    statusCode: StatusCodes7.OK,
     success: true,
     message: "Logged out successfully"
   });
@@ -499,7 +664,7 @@ var logoutUser = catchAsync_default(async (req, res) => {
 var getMe2 = catchAsync_default(async (req, res) => {
   const user = await AuthServices.getMe(req.user.userId);
   sendResponse_default(res, {
-    statusCode: StatusCodes5.OK,
+    statusCode: StatusCodes7.OK,
     success: true,
     message: "User retrieved successfully",
     data: user
@@ -550,7 +715,7 @@ var AuthRoutes = router;
 import { Router as Router2 } from "express";
 
 // src/modules/category/category.controller.ts
-import { StatusCodes as StatusCodes6 } from "http-status-codes";
+import { StatusCodes as StatusCodes8 } from "http-status-codes";
 
 // src/modules/category/category.service.ts
 var createCategory = async (payload) => {
@@ -589,7 +754,7 @@ var CategoryServices = {
 var createCategory2 = catchAsync_default(async (req, res) => {
   const category = await CategoryServices.createCategory(req.body);
   sendResponse_default(res, {
-    statusCode: StatusCodes6.CREATED,
+    statusCode: StatusCodes8.CREATED,
     success: true,
     message: "Category created successfully",
     data: category
@@ -598,7 +763,7 @@ var createCategory2 = catchAsync_default(async (req, res) => {
 var getAllCategories2 = catchAsync_default(async (req, res) => {
   const categories = await CategoryServices.getAllCategories();
   sendResponse_default(res, {
-    statusCode: StatusCodes6.OK,
+    statusCode: StatusCodes8.OK,
     success: true,
     message: "Categories retrieved successfully",
     data: categories
@@ -607,7 +772,7 @@ var getAllCategories2 = catchAsync_default(async (req, res) => {
 var getSingleCategory2 = catchAsync_default(async (req, res) => {
   const category = await CategoryServices.getSingleCategory(req.params.id);
   sendResponse_default(res, {
-    statusCode: StatusCodes6.OK,
+    statusCode: StatusCodes8.OK,
     success: true,
     message: "Category retrieved successfully",
     data: category
@@ -616,7 +781,7 @@ var getSingleCategory2 = catchAsync_default(async (req, res) => {
 var updateCategory2 = catchAsync_default(async (req, res) => {
   const category = await CategoryServices.updateCategory(req.params.id, req.body);
   sendResponse_default(res, {
-    statusCode: StatusCodes6.OK,
+    statusCode: StatusCodes8.OK,
     success: true,
     message: "Category updated successfully",
     data: category
@@ -625,7 +790,7 @@ var updateCategory2 = catchAsync_default(async (req, res) => {
 var deleteCategory2 = catchAsync_default(async (req, res) => {
   await CategoryServices.deleteCategory(req.params.id);
   sendResponse_default(res, {
-    statusCode: StatusCodes6.OK,
+    statusCode: StatusCodes8.OK,
     success: true,
     message: "Category deleted successfully"
   });
@@ -680,14 +845,14 @@ var CategoryRoutes = router2;
 import { Router as Router3 } from "express";
 
 // src/modules/property/property.controller.ts
-import { StatusCodes as StatusCodes8 } from "http-status-codes";
+import { StatusCodes as StatusCodes10 } from "http-status-codes";
 
 // src/modules/property/property.service.ts
-import { StatusCodes as StatusCodes7 } from "http-status-codes";
+import { StatusCodes as StatusCodes9 } from "http-status-codes";
 var ensureOwnership = async (propertyId, landlordId) => {
   const property = await prisma.property.findUniqueOrThrow({ where: { id: propertyId } });
   if (property.landlordId !== landlordId) {
-    throw new AppError_default(StatusCodes7.FORBIDDEN, "You can only manage your own properties");
+    throw new AppError_default(StatusCodes9.FORBIDDEN, "You can only manage your own properties");
   }
   return property;
 };
@@ -774,7 +939,7 @@ var PropertyServices = {
 var createProperty2 = catchAsync_default(async (req, res) => {
   const property = await PropertyServices.createProperty(req.user.userId, req.body);
   sendResponse_default(res, {
-    statusCode: StatusCodes8.CREATED,
+    statusCode: StatusCodes10.CREATED,
     success: true,
     message: "Property created successfully",
     data: property
@@ -787,7 +952,7 @@ var updateProperty2 = catchAsync_default(async (req, res) => {
     req.body
   );
   sendResponse_default(res, {
-    statusCode: StatusCodes8.OK,
+    statusCode: StatusCodes10.OK,
     success: true,
     message: "Property updated successfully",
     data: property
@@ -796,7 +961,7 @@ var updateProperty2 = catchAsync_default(async (req, res) => {
 var deleteProperty2 = catchAsync_default(async (req, res) => {
   await PropertyServices.deleteProperty(req.params.id, req.user.userId);
   sendResponse_default(res, {
-    statusCode: StatusCodes8.OK,
+    statusCode: StatusCodes10.OK,
     success: true,
     message: "Property deleted successfully"
   });
@@ -813,7 +978,7 @@ var getAllProperties2 = catchAsync_default(async (req, res) => {
     limit: limit ? Number(limit) : void 0
   });
   sendResponse_default(res, {
-    statusCode: StatusCodes8.OK,
+    statusCode: StatusCodes10.OK,
     success: true,
     message: "Properties retrieved successfully",
     data: result
@@ -822,7 +987,7 @@ var getAllProperties2 = catchAsync_default(async (req, res) => {
 var getSingleProperty2 = catchAsync_default(async (req, res) => {
   const property = await PropertyServices.getSingleProperty(req.params.id);
   sendResponse_default(res, {
-    statusCode: StatusCodes8.OK,
+    statusCode: StatusCodes10.OK,
     success: true,
     message: "Property retrieved successfully",
     data: property
@@ -884,21 +1049,57 @@ router3.patch(
 router3.delete("/:id", auth_default("LANDLORD"), PropertyControllers.deleteProperty);
 var PropertyRoutes = router3;
 
-// src/modules/rental-request/rental-request.route.ts
+// src/modules/payment/payment.route.ts
 import { Router as Router4 } from "express";
 
+// src/modules/payment/payment.validation.ts
+import { z as z4 } from "zod";
+var createPaymentIntentValidationSchema = z4.object({
+  body: z4.object({
+    rentalRequestId: z4.uuid("Invalid rental request id")
+  })
+});
+var confirmPaymentValidationSchema = z4.object({
+  body: z4.object({
+    paymentIntentId: z4.string().min(1, "Payment intent id is required")
+  })
+});
+var PaymentValidations = {
+  createPaymentIntentValidationSchema,
+  confirmPaymentValidationSchema
+};
+
+// src/modules/payment/payment.route.ts
+var router4 = Router4();
+router4.post(
+  "/create-intent",
+  auth_default("TENANT"),
+  validateRequest_default(PaymentValidations.createPaymentIntentValidationSchema),
+  PaymentControllers.createPaymentIntent
+);
+router4.post(
+  "/confirm",
+  auth_default("TENANT"),
+  validateRequest_default(PaymentValidations.confirmPaymentValidationSchema),
+  PaymentControllers.confirmPayment
+);
+var PaymentRoutes = router4;
+
+// src/modules/rental-request/rental-request.route.ts
+import { Router as Router5 } from "express";
+
 // src/modules/rental-request/rental-request.controller.ts
-import { StatusCodes as StatusCodes10 } from "http-status-codes";
+import { StatusCodes as StatusCodes12 } from "http-status-codes";
 
 // src/modules/rental-request/rental-request.service.ts
-import { StatusCodes as StatusCodes9 } from "http-status-codes";
+import { StatusCodes as StatusCodes11 } from "http-status-codes";
 var createRentalRequest = async (tenantId, payload) => {
   const property = await prisma.property.findUniqueOrThrow({ where: { id: payload.propertyId } });
   if (!property.isAvailable) {
-    throw new AppError_default(StatusCodes9.BAD_REQUEST, "This property is not currently available for rent");
+    throw new AppError_default(StatusCodes11.BAD_REQUEST, "This property is not currently available for rent");
   }
   if (property.landlordId === tenantId) {
-    throw new AppError_default(StatusCodes9.BAD_REQUEST, "You cannot submit a rental request for your own property");
+    throw new AppError_default(StatusCodes11.BAD_REQUEST, "You cannot submit a rental request for your own property");
   }
   const existingPendingRequest = await prisma.rentalRequest.findFirst({
     where: {
@@ -908,7 +1109,7 @@ var createRentalRequest = async (tenantId, payload) => {
     }
   });
   if (existingPendingRequest) {
-    throw new AppError_default(StatusCodes9.CONFLICT, "You already have a pending request for this property");
+    throw new AppError_default(StatusCodes11.CONFLICT, "You already have a pending request for this property");
   }
   const rentalRequest = await prisma.rentalRequest.create({
     data: {
@@ -926,11 +1127,11 @@ var updateRentalRequestStatus = async (rentalRequestId, landlordId, status) => {
     include: { property: true }
   });
   if (rentalRequest.property.landlordId !== landlordId) {
-    throw new AppError_default(StatusCodes9.FORBIDDEN, "You can only manage requests for your own properties");
+    throw new AppError_default(StatusCodes11.FORBIDDEN, "You can only manage requests for your own properties");
   }
   if (rentalRequest.status !== "PENDING") {
     throw new AppError_default(
-      StatusCodes9.BAD_REQUEST,
+      StatusCodes11.BAD_REQUEST,
       `This rental request has already been ${rentalRequest.status.toLowerCase()} and cannot be updated`
     );
   }
@@ -978,7 +1179,7 @@ var getSingleRentalRequest = async (id, userId, role) => {
   const isLandlord = rentalRequest.property.landlordId === userId;
   const isAdmin = role === "ADMIN";
   if (!isTenant && !isLandlord && !isAdmin) {
-    throw new AppError_default(StatusCodes9.FORBIDDEN, "You do not have permission to view this rental request");
+    throw new AppError_default(StatusCodes11.FORBIDDEN, "You do not have permission to view this rental request");
   }
   return rentalRequest;
 };
@@ -994,7 +1195,7 @@ var RentalRequestServices = {
 var createRentalRequest2 = catchAsync_default(async (req, res) => {
   const rentalRequest = await RentalRequestServices.createRentalRequest(req.user.userId, req.body);
   sendResponse_default(res, {
-    statusCode: StatusCodes10.CREATED,
+    statusCode: StatusCodes12.CREATED,
     success: true,
     message: "Rental request submitted successfully",
     data: rentalRequest
@@ -1007,7 +1208,7 @@ var updateRentalRequestStatus2 = catchAsync_default(async (req, res) => {
     req.body.status
   );
   sendResponse_default(res, {
-    statusCode: StatusCodes10.OK,
+    statusCode: StatusCodes12.OK,
     success: true,
     message: `Rental request ${rentalRequest.status.toLowerCase()} successfully`,
     data: rentalRequest
@@ -1016,7 +1217,7 @@ var updateRentalRequestStatus2 = catchAsync_default(async (req, res) => {
 var getMyRentalRequests2 = catchAsync_default(async (req, res) => {
   const rentalRequests = await RentalRequestServices.getMyRentalRequests(req.user.userId);
   sendResponse_default(res, {
-    statusCode: StatusCodes10.OK,
+    statusCode: StatusCodes12.OK,
     success: true,
     message: "Rental requests retrieved successfully",
     data: rentalRequests
@@ -1025,7 +1226,7 @@ var getMyRentalRequests2 = catchAsync_default(async (req, res) => {
 var getLandlordRentalRequests2 = catchAsync_default(async (req, res) => {
   const rentalRequests = await RentalRequestServices.getLandlordRentalRequests(req.user.userId);
   sendResponse_default(res, {
-    statusCode: StatusCodes10.OK,
+    statusCode: StatusCodes12.OK,
     success: true,
     message: "Rental requests retrieved successfully",
     data: rentalRequests
@@ -1038,7 +1239,7 @@ var getSingleRentalRequest2 = catchAsync_default(async (req, res) => {
     req.user.role
   );
   sendResponse_default(res, {
-    statusCode: StatusCodes10.OK,
+    statusCode: StatusCodes12.OK,
     success: true,
     message: "Rental request retrieved successfully",
     data: rentalRequest
@@ -1053,17 +1254,17 @@ var RentalRequestControllers = {
 };
 
 // src/modules/rental-request/rental-request.validation.ts
-import { z as z4 } from "zod";
-var createRentalRequestValidationSchema = z4.object({
-  body: z4.object({
-    propertyId: z4.uuid("Invalid property id"),
-    moveInDate: z4.string().refine((val) => !Number.isNaN(Date.parse(val)), "Invalid move-in date").refine((val) => new Date(val).getTime() > Date.now(), "Move-in date must be in the future"),
-    message: z4.string().optional()
+import { z as z5 } from "zod";
+var createRentalRequestValidationSchema = z5.object({
+  body: z5.object({
+    propertyId: z5.uuid("Invalid property id"),
+    moveInDate: z5.string().refine((val) => !Number.isNaN(Date.parse(val)), "Invalid move-in date").refine((val) => new Date(val).getTime() > Date.now(), "Move-in date must be in the future"),
+    message: z5.string().optional()
   })
 });
-var updateRentalRequestStatusValidationSchema = z4.object({
-  body: z4.object({
-    status: z4.enum(["APPROVED", "REJECTED"])
+var updateRentalRequestStatusValidationSchema = z5.object({
+  body: z5.object({
+    status: z5.enum(["APPROVED", "REJECTED"])
   })
 });
 var RentalRequestValidations = {
@@ -1072,26 +1273,26 @@ var RentalRequestValidations = {
 };
 
 // src/modules/rental-request/rental-request.route.ts
-var router4 = Router4();
-router4.get("/my-requests", auth_default("TENANT"), RentalRequestControllers.getMyRentalRequests);
-router4.get("/landlord-requests", auth_default("LANDLORD"), RentalRequestControllers.getLandlordRentalRequests);
-router4.get("/:id", auth_default(), RentalRequestControllers.getSingleRentalRequest);
-router4.post(
+var router5 = Router5();
+router5.get("/my-requests", auth_default("TENANT"), RentalRequestControllers.getMyRentalRequests);
+router5.get("/landlord-requests", auth_default("LANDLORD"), RentalRequestControllers.getLandlordRentalRequests);
+router5.get("/:id", auth_default(), RentalRequestControllers.getSingleRentalRequest);
+router5.post(
   "/",
   auth_default("TENANT"),
   validateRequest_default(RentalRequestValidations.createRentalRequestValidationSchema),
   RentalRequestControllers.createRentalRequest
 );
-router4.patch(
+router5.patch(
   "/:id/status",
   auth_default("LANDLORD"),
   validateRequest_default(RentalRequestValidations.updateRentalRequestStatusValidationSchema),
   RentalRequestControllers.updateRentalRequestStatus
 );
-var RentalRequestRoutes = router4;
+var RentalRequestRoutes = router5;
 
 // src/routes/index.ts
-var router5 = Router5();
+var router6 = Router6();
 var moduleRoutes = [
   {
     path: "/auth",
@@ -1108,15 +1309,24 @@ var moduleRoutes = [
   {
     path: "/rental-requests",
     route: RentalRequestRoutes
+  },
+  {
+    path: "/payments",
+    route: PaymentRoutes
   }
 ];
-moduleRoutes.forEach((route) => router5.use(route.path, route.route));
-var routes_default = router5;
+moduleRoutes.forEach((route) => router6.use(route.path, route.route));
+var routes_default = router6;
 
 // src/app.ts
 var app = express();
 app.use(cors({ origin: true, credentials: true }));
 app.use(cookieParser());
+app.post(
+  "/api/v1/payments/webhook",
+  express.raw({ type: "application/json" }),
+  PaymentControllers.stripeWebhook
+);
 app.use(express.json());
 app.get("/", (req, res) => {
   res.send("Hello World!");

@@ -6,6 +6,13 @@ const createPaymentIntentValidationSchema = z.object({
   }),
 });
 
+const confirmPaymentValidationSchema = z.object({
+  body: z.object({
+    paymentIntentId: z.string().min(1, 'Payment intent id is required'),
+  }),
+});
+
 export const PaymentValidations = {
   createPaymentIntentValidationSchema,
+  confirmPaymentValidationSchema,
 };

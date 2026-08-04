@@ -12,5 +12,11 @@ router.post(
   validateRequest(PaymentValidations.createPaymentIntentValidationSchema),
   PaymentControllers.createPaymentIntent,
 );
+router.post(
+  '/confirm',
+  auth('TENANT'),
+  validateRequest(PaymentValidations.confirmPaymentValidationSchema),
+  PaymentControllers.confirmPayment,
+);
 
 export const PaymentRoutes = router;

@@ -39,6 +39,7 @@ const createPaymentIntent = async (tenantId: string, rentalRequestId: string) =>
   const paymentIntent = await stripe.paymentIntents.create({
     amount,
     currency: 'usd',
+    automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
     metadata: {
       rentalRequestId: rentalRequest.id,
       tenantId,
@@ -62,6 +63,82 @@ const createPaymentIntent = async (tenantId: string, rentalRequestId: string) =>
   };
 };
 
+const markPaymentCompleted = async (transactionId: string) => {
+  const payment = await prisma.payment.findUnique({ where: { transactionId } });
+
+  if (!payment) {
+    return null;
+  }
+
+  if (payment.status === 'COMPLETED') {
+    return payment;
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const result = await tx.payment.update({
+      where: { id: payment.id },
+      data: { status: 'COMPLETED', paidAt: new Date() },
+    });
+
+    await tx.rentalRequest.update({
+      where: { id: payment.rentalRequestId },
+      data: { status: 'ACTIVE' },
+    });
+
+    return result;
+  });
+};
+
+const markPaymentFailed = async (transactionId: string) => {
+  await prisma.payment.updateMany({
+    where: { transactionId, status: 'PENDING' },
+    data: { status: 'FAILED' },
+  });
+};
+
+const handleWebhookEvent = async (event: Stripe.Event) => {
+  if (event.type === 'payment_intent.succeeded') {
+    const paymentIntent = event.data.object;
+    await markPaymentCompleted(paymentIntent.id);
+  } else if (event.type === 'payment_intent.payment_failed') {
+    const paymentIntent = event.data.object;
+    await markPaymentFailed(paymentIntent.id);
+  }
+};
+
+const confirmPayment = async (tenantId: string, paymentIntentId: string) => {
+  const payment = await prisma.payment.findUnique({
+    where: { transactionId: paymentIntentId },
+    include: { rentalRequest: true },
+  });
+
+  if (!payment) {
+    throw new AppError(StatusCodes.NOT_FOUND, 'No payment record found for this transaction');
+  }
+
+  if (payment.rentalRequest.tenantId !== tenantId) {
+    throw new AppError(StatusCodes.FORBIDDEN, 'You can only confirm your own payments');
+  }
+
+  const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+
+  if (paymentIntent.status === 'succeeded') {
+    const updated = await markPaymentCompleted(paymentIntentId);
+    return updated;
+  }
+
+  if (paymentIntent.status === 'canceled' || paymentIntent.status === 'requires_payment_method') {
+    await markPaymentFailed(paymentIntentId);
+    throw new AppError(StatusCodes.BAD_REQUEST, `Payment was not successful (status: ${paymentIntent.status})`);
+  }
+
+  throw new AppError(StatusCodes.BAD_REQUEST, `Payment has not completed yet (status: ${paymentIntent.status})`);
+};
+
 export const PaymentServices = {
   createPaymentIntent,
+  handleWebhookEvent,
+  confirmPayment,
 };
+
+export { stripe };
