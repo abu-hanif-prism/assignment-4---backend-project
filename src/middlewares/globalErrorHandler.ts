@@ -26,6 +26,9 @@ const globalErrorHandler: ErrorRequestHandler = (err, req, res, next) => {
     } else if (err.code === 'P2025') {
       statusCode = StatusCodes.NOT_FOUND;
       message = 'Resource not found';
+    } else if (err.code === 'P2003') {
+      statusCode = StatusCodes.BAD_REQUEST;
+      message = `Invalid reference for field: ${err.meta?.field_name ?? 'unknown'}`;
     } else {
       statusCode = StatusCodes.BAD_REQUEST;
       message = err.message;
